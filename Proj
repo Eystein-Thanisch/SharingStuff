@@ -1,0 +1,2152 @@
+import warnings
+import time
+import string
+import pronouncing
+import tkinter as tk
+
+#Settings Variables - these should be customisable within the program 
+#by the user
+# Needs Scorer weightings and a dedicated combiner
+
+# Variables Controlled in Settings
+# Syllable Scorer 
+SyllableWorstCase = 3 # Syllable Scorer - worst case 
+SyllableMod = 2.5  # Syllable Scorer - SyllError/SyllableMod = Penalty
+# Iambic P Mode
+RhymeWeight = 5 #Suggested Weighting, three weightings must total 10
+SyllWeight = 5
+IamIPWeight = 5 # To be confirmed
+OoOP = 2 # IP Scorer - Penalty for Out of Order stresses
+
+#Structure Detection Variables
+RhymeStrictLevel = 2    # 1 - 3(most strict) 
+SyllFlex = 1 # How much flexibility is added either side of a syll count
+IncRhy = True # Ovverride to always include a rhyme check 
+IncSyl = True # Whether to include a syllable check
+
+#Set variables
+LinesList = [] # Initialise list. Each element is an object of type 'Line'
+TKLineNumCheck = 0 # Counter to check when Line Nums in tk should be updated
+OverallFeedback = ""
+
+
+# To toggle whether checks are used
+SylCheck = False #Whether the syllables/line will be scored
+RhyCheck = False #Whether rhyme patterns will be scored
+IPCheck = False #Whether the poem uses Iambic Pentameter
+StreCheck = False #Whether stress patterns will be scored
+
+# Whether the poem and structure exist
+PoemExists = False
+StructureExists = False
+
+#Vowel List in ARPAbet
+VowelSet = {"AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH",
+"IY", "OW", "OY", "UH", "UW"}
+
+Title = "" # Should have a max length
+
+class Line:
+#The poem will have a collection of lines
+  text = ""
+  pronunciation = []
+  lineNum = 0
+  stanza = 0
+  noSounds = [] #For words where 'pronouncing' cannot help. Format position then word "3Haha"
+  feedback = "" #Feedback about the line's scoring  
+
+
+  def __init__(self, lineNum, stanza, text):
+    self.lineNum = lineNum
+    self.stanza = stanza
+    self.text = text
+    
+  def getSounds(self) -> list:
+    # This is where a text string is processed into a list of strings
+    # Each element in the list represents a word in the line
+    newText = [] # List to store words without punc either side
+    text_Temp = self.text.split() # makes text into a list
+    unrecognisedCount = 0
+    self.noSounds = []
+    for word in text_Temp: # remove punctuation from start
+        for letter in word:
+            if letter in string.ascii_letters:
+              break
+            else:
+             word = word[1:]       
+        for j in range(len(word)-1, -1, -1): # remove punctuation from end 
+          if word[j] in string.ascii_letters:
+            break
+          else:              
+            word = word[0:j]      
+        if len(pronouncing.phones_for_word(word)) > 0:
+          newText.append(word)
+        else:
+          self.noSounds.append(str(len(newText)+unrecognisedCount)+word)
+          unrecognisedCount += 1
+    phonemes = [pronouncing.phones_for_word(p)[0] for p in newText]
+    self.pronunciation = phonemes
+    return phonemes
+    
+  def getStressPattern(self)-> str:
+    # This is to give a string with 0, 1 and 2
+    # 0 = unstressed, 1 = stressed, 2 = either
+    stresses = ""
+    phon = self.getSounds()
+    for word in phon:
+      wordStresses = ""
+      sounds = word.split()
+      for i in sounds:
+        if i[:2] in VowelSet:
+          if i[2] == "0":
+            wordStresses += "0"
+          else:
+            wordStresses += "1"
+      if len(wordStresses) == 1:    #If the word has one syll, stress is discretionary
+        wordStresses = "2"
+      stresses += wordStresses
+    return(stresses)      
+    
+    
+    #text_Temp = self.text.split() # makes text into a list
+    #for word in text_Temp: # remove punctuation from start
+    
+
+  def getSyllableCount(self):
+    phon = self.getSounds()
+    return (sum([pronouncing.syllable_count(p) for p in phon]))
+  
+  def getRhyme1(self)-> list:
+  #returns the final phonemes up to a stressed syllable
+  #returns sounds in reverse order
+  #If final vowel sound is stressed, that is enough, otherwise need both
+  #0 indicates unstressed in pronouncing 
+    FinalSounds = []
+    phon = self.getSounds()
+    
+    if (len(phon)) > 0:
+      PhonList = phon[len(phon)-1].split()    
+      for x in range(len(PhonList)-1,-1,-1):
+        FinalSounds.append(PhonList[x])
+        if PhonList[x][:2] in VowelSet:
+            if PhonList[x][2] != "0":
+                break
+    else:
+      FinalSounds.append(phon)
+    return(FinalSounds)
+    
+  def getRhyme(self)-> list:
+  #returns the final phonemes up to a stressed syllable
+  #returns sounds in reverse order
+  #If final vowel sound is stressed, that is enough, otherwise need both
+  #0 indicates unstressed in pronouncing 
+    FinalSounds = []
+    phon = self.getSounds()
+    
+    if (len(phon)) > 0:
+      PhonList = phon[len(phon)-1].split()    
+      for x in range(len(PhonList)-1,-1,-1):
+        #FinalSounds.append(PhonList[x])
+        if PhonList[x][:2] in VowelSet:
+            FinalSounds.append(PhonList[x][:2])
+            if PhonList[x][2] != "0":
+                break
+        else:
+          FinalSounds.append(PhonList[x])
+    else:
+      FinalSounds.append(phon)
+    
+    return(FinalSounds)  
+    
+    
+   
+class Structure:
+#Each poem will have a defined structure
+  TotalLi = 0 #Number of lines in the poem
+  LineStanz = [] #List with stanza as value and (index+1) is
+  # line number
+  RhymeScheme = [] # List containing the rhyme scheme
+  SyllList = [] # List of lists
+  # Index is the line number
+  # Tuple for each line containing (sylMin, sylMax)
+ 
+  def __init__(self, lines):
+    self.TotalLi = lines
+    
+  def Structure2String(self)-> str:     # Used for testing in CMD line
+    Str = "\nStructure of the poem: \n"
+    Str += "Total line count = " + str(self.TotalLi) + "\n"
+    
+    for i in range(len(self.LineStanz)):
+        Str += "Line " + str(i+1) + " Stanza " + str(self.LineStanz[i]) + \
+        " is between " + str(self.SyllList[i][0]) + " and " + \
+        str(self.SyllList[i][1]) + " syllables. "
+        if RhyCheck == True:
+          Str += str(chr(self.RhymeScheme[i])) 
+        Str += "\n"
+    
+    return Str
+  
+  def TKStructure2String(self)-> str:     # Used to make a label for TK
+    Str = ""
+    Stanza = 1
+    for i in range(len(self.LineStanz)):
+      if self.LineStanz[i] == Stanza:
+          if RhyCheck == True:
+            Str +="      " + str(chr(self.RhymeScheme[i])) + "                   \
+                              "
+          else:
+            Str +=  "                                                      "      
+          if SylCheck == True:
+            Str += str(self.SyllList[i][0]) + " | " + str(self.SyllList[i][1])
+          else:
+            Str += "                 "
+          if IPCheck == True:
+            Str += "                                              Yes"        
+          Str += "\n"
+      else:
+        Str += "\n"
+        Stanza += 1
+        if RhyCheck == True:
+            Str +="      " + str(chr(self.RhymeScheme[i])) + "                   \
+                              "
+        else:
+          Str +=  "                                                      "      
+        if SylCheck == True:
+          Str += str(self.SyllList[i][0]) + " | " + str(self.SyllList[i][1])
+        else:
+          Str += "                 "
+        if IPCheck == True:
+          Str += "                                              Yes"        
+        Str += "\n"
+    
+    return Str  
+    
+
+    
+# This section is for stored, standard poetic structures
+def Limerick(P: Structure)-> Structure:
+    global CurrentStructure
+    global SylCheck
+    global RhyCheck 
+    global IPCheck
+    global StructureExists
+    SylCheck = True
+    RhyCheck = True
+    IPCheck = False
+    StructureExists = True 
+    P.TotalLi = 5
+    P.LineStanz = [1, 1, 1, 1, 1]
+    P.RhymeScheme = [65, 65, 66, 66, 65]
+    P.SyllList = [ [7, 9], [7, 9], \
+    [4, 5], [4, 5], [7, 9]]
+    CheckEnableStructView()
+    UpdateLineNumWStruc(P)
+    CurrentStructure = P
+    StructureLabelCheck()
+    return P
+
+def Haiku(P: Structure) -> Structure:
+    global CurrentStructure
+    global SylCheck
+    global RhyCheck 
+    global IPCheck
+    global StructureExists
+    SylCheck = True
+    RhyCheck = False
+    IPCheck = False
+    StructureExists = True   
+    P.TotalLi = 3
+    P.LineStanz = [1, 1, 1]
+    P.SyllList = [ [5, 5], [7, 7], [5, 5] ]
+    CheckEnableStructView()
+    UpdateLineNumWStruc(P)
+    CurrentStructure = P
+    StructureLabelCheck()
+    return P
+    
+    
+def Sonnet() -> Structure:
+    global SylCheck
+    global RhyCheck 
+    global StructureExists
+    global IPCheck
+    SylCheck = True
+    RhyCheck = True
+    IPCheck = True
+    StructureExists = True
+    
+def PetrSonnet(P: Structure) -> Structure:
+  global CurrentStructure
+  Sonnet()
+  P.TotalLi = 14
+  P.LineStanz = [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2]
+  P.RhymeScheme = [65, 66, 66, 65, 65, 66, 66, 65, 67, 68, 69, \
+  67, 68, 69]
+  P.SyllList = []
+  for line in range(0,14):
+    P.SyllList.append([10, 10])
+  CheckEnableStructView()
+  UpdateLineNumWStruc(P)
+  CurrentStructure = P
+  StructureLabelCheck()
+  return P  
+    
+def ShakSonnet(P: Structure) -> Structure:
+  global CurrentStructure
+  Sonnet()
+  P.TotalLi = 14 
+  P.LineStanz = [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4]
+  P.RhymeScheme = [65, 66, 65, 66, 67, 68, 67, 68, 69, 70, 69, \
+  70, 71, 71]
+  P.SyllList = []
+  for line in range(0,14):
+    P.SyllList.append([10, 10])
+  CheckEnableStructView()
+  UpdateLineNumWStruc(P)
+  CurrentStructure = P
+  StructureLabelCheck()
+  return P  
+    
+def SpenSonnet(P: Structure) -> Structure:
+  global CurrentStructure
+  Sonnet()
+  P.TotalLi = 14 
+  P.LineStanz = [1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4]
+  P.RhymeScheme = [65, 66, 65, 66, 66, 67, 66, 67, 67, 68, 67, \
+  68, 69, 69]
+  P.SyllList = []
+  for line in range(0,14):
+    P.SyllList.append([10, 10])
+  CheckEnableStructView()
+  UpdateLineNumWStruc(P)
+  CurrentStructure = P
+  StructureLabelCheck()
+  return P  
+    
+def SimpSonnet(P: Structure) -> Structure:
+  global CurrentStructure
+  Sonnet()
+  global IPCheck
+  IPCheck = False
+  P.TotalLi = 14
+  P.LineStanz = [1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2]
+  P.RhymeScheme = [65, 66, 66, 65, 65, 66, 66, 65, 67, 68, 69, \
+  67, 68, 69]
+  P.SyllList = []
+  for line in range(0,14):
+    P.SyllList.append([10, 10])  
+  CheckEnableStructView()
+  UpdateLineNumWStruc(P)  
+  CurrentStructure = P
+  StructureLabelCheck()
+  return P  
+        
+
+def Quatrain(P: Structure) -> Structure:
+    global CurrentStructure
+    global SylCheck
+    global RhyCheck 
+    global IPCheck
+    global StructureExists
+    SylCheck = True
+    RhyCheck = True
+    IPCheck = False
+    StructureExists = True
+    
+def Quatrains(P: Structure) -> None:
+    print("Figure it out")
+
+    
+#This section is for rhyming rules etc
+
+def LinePronunciation2String(LineNum: int) -> str:
+    #Returns a string with the pronunciation of 0-ind line num
+    Output = ""
+    LinesList[LineNum].getSounds()
+    Output += str(LinesList[LineNum].pronunciation)
+    Output = Output[1:-1]
+    return Output
+    
+def PoemPronunc2StringNoStruct() -> str:
+    #Returns phonemes for all lines
+    Output = ""
+    Stanza = 0
+    for i in range(len(LinesList)):
+      if LinesList[i].stanza == Stanza:
+        Output += LinePronunciation2String(i)
+        Output += "\n"
+      else:
+        Stanza += 1
+        Output += "\n"
+        Output += LinePronunciation2String(i)
+        Output += "\n"
+    return Output
+    
+def PoemNoSoundsPron2String() -> str:
+    Output = ""
+    Stanza = 0
+    for i in range(len(LinesList)):
+      LinesList[i].getSounds()
+      if len(LinesList[i].noSounds) == 0:
+        Output += "Line "+ str(i+1) + ":\n"
+      else:
+        Output += "Line "+ str(i+1) + ":  "
+        for j in LinesList[i].noSounds:
+          Pos = ""
+          Word = ""
+          for k in j:
+            if k in string.digits:
+              Pos += k 
+            else:
+              Word += k
+          Output += ("Position: " + Pos + " " + "Word: " + Word + 
+          " ")
+        Output += "\n"
+    return Output    
+
+def ConsonantExchange1(Phonemes: list) -> list:
+    #Swaps aspirated consonants for voiced equivalents
+    
+    for x in range(len(Phonemes)):
+        if Phonemes[x] == "P":
+            Phonemes[x] = "B"
+        if Phonemes[x] == "T":
+            Phonemes[x] = "D"
+        if Phonemes[x] == "CH":
+            Phonemes[x] = "JH"
+        if Phonemes[x] == "K":
+            Phonemes[x] = "G"
+        if Phonemes[x] == "F":
+            Phonemes[x] = "V"
+        if Phonemes[x] == "S":
+            Phonemes[x] = "Z"
+        if Phonemes[x] == "SH":
+            Phonemes[x] = "ZH"
+        
+    return Phonemes
+    
+def ConsonantIgnore (Phonemes: list) -> list:
+    #Removes consonants from phonemes list
+    Pho = []
+    for x in range(len(Phonemes)):
+        if Phonemes[x][:2] in VowelSet:
+            Pho.append(Phonemes[x])            
+    return Pho        
+
+def RemoveStressLast (Phonemes: list) -> list:
+    #Removes stress from phonemes list
+    #Returns final syllable
+    Pho = []
+    for x in range(len(Phonemes)):
+        if Phonemes[x][:2] in VowelSet:
+            Pho.append(Phonemes[x][:2])
+            break
+        else:
+            Pho.append(Phonemes[x])
+    return Pho        
+
+def RhymeDetect(Level: int, Line1: Line, Line2: Line) -> bool:
+    # Checks if two lines rhyme
+    #Level is 1(chill) to 3(strictest)
+    LinesRhyme = False
+    
+    Li1 = Line1.getRhyme()
+    Li2 = Line2.getRhyme()
+    
+    
+    #Check for Level 3
+    if Li1 == Li2:
+      LinesRhyme = True
+      return LinesRhyme
+    
+    
+    if Level < 3:
+        Li1 = ConsonantExchange1(Li1)
+        Li2 = ConsonantExchange1(Li2)
+    
+    #Check for Level 2
+    if Level < 3:
+      if Li1 == Li2:
+        LinesRhyme = True
+        return LinesRhyme
+
+    if Level < 2:
+        Li1 = ConsonantIgnore(Li1)
+        Li2 = ConsonantIgnore(Li2)
+    
+    #Check for Level 2
+    if Level < 2:
+      if Li1 == Li2:
+        LinesRhyme = True
+        return LinesRhyme    
+    
+    return LinesRhyme
+
+def StructureDetect(TotalLength: int, SylC: bool, RhyC: bool) -> Structure:
+    #Should create a new structure based on a poem that was input
+    # Needs to get: Rhyme Scheme, min and max syllables]
+    global CurrentStructure
+    global RhyCheck
+    global SylCheck
+    global StructureExists
+    printingLine = 0
+    RhymePattCount = 65  
+    SuggestStruct = Structure(TotalLength) # Need to initialise a new structure here
+    NewRhymeScheme = []
+    NewStanLiList = []
+    NewSyllList = []
+    RhyCheck = False
+    SylCheck = False
+       
+    
+    #Update new stanza line list
+    for i in LinesList:
+        NewStanLiList.append(i.stanza)
+        
+    #Update syllable list
+    for i in LinesList:
+        LoSyll = (int(i.getSyllableCount()) - SyllFlex)
+        if LoSyll < 1:
+            LoSyll = 0
+        HiSyll = (int(i.getSyllableCount()) + SyllFlex)    
+        NewSyllList.append([LoSyll, HiSyll])    
+    
+    #Update new rhyme scheme list
+    NewRhymeScheme.append(RhymePattCount)
+    
+    for i in range(1,len(LinesList)):
+        #Update new rhyme scheme
+        if RhymeDetect(RhymeStrictLevel, LinesList[i-1], LinesList[i]) == True:
+            NewRhymeScheme.append(NewRhymeScheme[i-1])
+            continue        
+        if i >= 2:
+          if RhymeDetect(RhymeStrictLevel, LinesList[i-2], LinesList[i]) == True:
+            NewRhymeScheme.append(NewRhymeScheme[i-2])
+            continue            
+        if i >= 3:
+          if RhymeDetect(RhymeStrictLevel, LinesList[i-3], LinesList[i]) == True:
+            NewRhymeScheme.append(NewRhymeScheme[i-3])
+            continue
+        if i >= 4:
+          if RhymeDetect(RhymeStrictLevel, LinesList[i-3], LinesList[i]) == True:
+            NewRhymeScheme.append(NewRhymeScheme[i-4])
+            continue
+        else:
+          RhymePattCount += 1
+          NewRhymeScheme.append(RhymePattCount)
+    
+    #Turn on rhymes if there are enough
+    if (RhymePattCount-65) == 0:
+        RhyCheck = True
+    if (RhymePattCount-65) > 0:    
+      if len(LinesList)/(RhymePattCount-65) > 2:
+        RhyCheck = True
+
+    SylCheck = SylC
+    
+      
+    if RhyC == True:  
+      RhyCheck = True
+    
+    # Load info into CurrentStructure
+    CurrentStructure = Structure(len(LinesList))
+    CurrentStructure.TotalLi = len(LinesList)
+    CurrentStructure.LineStanz = NewStanLiList
+    CurrentStructure.RhymeScheme = NewRhymeScheme
+    CurrentStructure.SyllList = NewSyllList
+    StructureExists = True
+    
+    CheckEnableStructView()
+    UpdateLineNumWStruc(CurrentStructure)  
+    StructureLabelCheck()
+
+    return CurrentStructure
+
+    
+
+def RhymeQualityDetect(Line1: Line, Line2: Line) -> int:
+    Result = 0
+    if RhymeDetect(1, Line1, Line2) == True:
+        Result = 1
+    if RhymeDetect(2, Line1, Line2) == True:
+        Result = 2
+    if RhymeDetect(3, Line1, Line2) == True:
+        Result = 3
+    return Result
+
+
+# Structure stuff goes here
+
+
+def ManualInputStructure(): #
+    StList = []
+    ThisLine = 1
+    LinesTot = 0 
+    StTotal = int(input("How many stanzas will the poem have? "))
+    # LineStanz is the new list 
+    for i in range(1, StTotal+1):
+        Lines = int(input("How many lines will stanza " + str(i) + " have? "))
+        LinesTot += Lines
+        for j in range(Lines):
+            StList.append(i)
+    
+    #Create inst. of Structure 
+    PoemStruct = Structure(LinesTot)
+    PoemStruct.LineStanz = StList
+    
+    #Set syllable count for each line 
+    InputSyllCount(PoemStruct)
+    
+    #Set rhyme scheme
+    InputRhymeScheme(PoemStruct)
+
+    
+    #Tuple for each line containing (sylMin, sylMax, UnstrMin, 
+    #UnstrMax, StreMin, StreMax)
+    print (PoemStruct.Structure2String())
+
+
+def RhymeChoiceInfo():
+# Should this be nested in ManualInputOptions?
+    print("If rhyme level is 3, every rhyme must be \
+perfect.")
+    print("If rhyme level is 2, similar pairs of consonants \
+will be allowed. (Enough and love would be a rhyme)")
+    print ("If rhyme level is 1, only vowel sounds are \
+checked for rhymes. (Fox and top would be a rhyme)")
+    #Needs "Press any key to continue" bit
+
+
+  
+def inputTextNoStruct(T: tk.Text) -> None:
+    global LinesList
+    LinesList.clear()
+    stanza = 1
+    LineCounter = 1
+
+    P = str(PoemText.index(tk.END))
+    finish = (P[0:(len(P)-2)])
+         
+    for i in range(1, int(finish)):
+      inputLine = PoemText.get(float(i), float(i+1))
+      if len(inputLine) != 1:
+        ThisLine = Line(LineCounter, stanza, inputLine)
+        ThisLine.getSounds()
+        LineCounter += 1
+        LinesList.append(ThisLine)
+                    
+      if len(inputLine) == 1:
+        stanza += 1      
+    UpdateLineNum()
+
+
+def inputTextWithStruct(S: Structure) -> None:
+  NumberofLines = S.TotalLi 
+  StanzaList = S.LineStanz
+  
+  for lineIndex in range(NumberofLines):
+    inputText = input ("Line " + str(lineIndex + 1) + ": ")
+    stanza = StanzaList[lineIndex]
+    ThisLine = Line(lineIndex, stanza, inputText)
+    LinesList.append(ThisLine)
+    UnrecognisedWarning()
+
+
+# Example for testing
+def InputExampleLimerick():
+    Line1 = Line(1,1, "There was a young puppy called scout")
+    Line2 = Line(2,1, "she was always jumping about")
+    Line3 = Line(3,1, "To scratch my knee")
+    Line4 = Line(4,1, "Or aggressively wee")
+    Line5 = Line(5,1, "When she goes to the pub she is a lout")
+    
+    #Line1 = Line(1,1, "There was a young man called me")
+    #Line2 = Line(2,1, "WHo was aged one, two or three")
+    #Line3 = Line(3,1, "You are my dear Sn")
+    #Line4 = Line(4,1, "And day is done")
+    #Line5 = Line(5,1, "And that must be all you see")
+    
+    LinesList.append(Line1)
+    LinesList.append(Line2)
+    LinesList.append(Line3)
+    LinesList.append(Line4)
+    LinesList.append(Line5)
+
+
+#def displayPoem(S: Structure) -> None: #No longer needed
+#    Stanza = S.LineStanz[0]
+#    for i in range(len(LinesList)):
+#        if S.LineStanz[i] == Stanza:
+#            print(LinesList[i].text)
+#        else:
+#            Stanza += 1
+#            print ("")
+#            print(LinesList[i].text)
+    
+    
+def ReadPlainTextStruct (filename: str) -> Structure: 
+    # Read a structure in plain text and stores it
+    global CurrentStructure
+    global SylCheck
+    global RhyCheck 
+    global StructureExists
+    with open (filename) as f:
+        TopLine = f.readline()
+        TL = TopLine.split(",")
+        P = Structure(TL[0])
+        if TL[1] == "R":
+          RhyCheck = True
+        elif TL[1] == "r":
+          RhyCheck = False
+        if TL [2] == "S":
+          SylCheck = True
+        elif TL[2] == "s":
+          RhyCheck = False
+        for i in range(0, int(TL[0])):
+          line = f.readline()
+          lineVal = line.split(",")
+          P.LineStanz.append(lineVal[0])
+          if RhyCheck == True:
+            P.RhymeScheme.append(ord(lineVal[1]))
+            if SylCheck == True:
+              P.SyllList.append([int(lineVal[2]),int(lineVal[3])])
+          if RhyCheck == False and SylCheck == True:
+              P.SyllList.append([int(lineVal[1]),int(lineVal[2])])
+    StructureExists = True
+    CurrentStructure = P
+    CheckEnableStructView()
+    UpdateLineNumWStruc(P)
+    StructureLabelCheck()    
+    return P
+    
+    
+def SavePlainTextPoem(filename: str, S: Structure) -> None:
+    # Save a poem as a plain text file
+    with open ("filename") as f:
+    
+        Stanza = S.LineStanz[0]
+        for i in range(len(LinesList)):
+            if S.LineStanz[i] == Stanza:
+                f.write(LinesList[i].text)
+                f.write ("\n")
+            else:
+                Stanza += 1
+                f.write ("")
+                f.write(LinesList[i].text)
+                f.write ("\n")
+
+
+
+
+# Section to score poems
+def SyllableScorer(S: Structure, SWC: int, SM: int) -> int: 
+    #Gives a score out of 100 for the syllables matching 
+    #the structure
+    global LinesList
+    
+    WorstCase = SyllableWorstCase #The maximum syllable penalty 
+    Modifier = SyllableMod # The number that the syllable error is divided by to give penalty
+    Penalty = 0 # Initialises penalty to zero
+    for i in range(len(LinesList)):
+        Syll = LinesList[i].getSyllableCount()
+        if Syll < S.SyllList[i][0]:
+            if (S.SyllList[i][0]-Syll <= WorstCase):
+              Penalty += (S.SyllList[i][0]-Syll)/Modifier
+              LinesList[i].feedback += "Short by " + str(S.SyllList[i][0]-Syll) + " syllable(s)."
+            else:
+              Penalty += WorstCase/Modifier
+              LinesList[i].feedback += "Short by " + str(S.SyllList[i][0]-Syll) + " syllable(s)."              
+                
+        if Syll > S.SyllList[i][1]:
+            if (Syll-S.SyllList[i][1] <= WorstCase):
+              Penalty += (Syll-S.SyllList[i][1])/Modifier
+              LinesList[i].feedback += "Long by " + str(S.SyllList[i][0]-Syll) + " syllable(s)."
+            else:
+              Penalty += WorstCase/Modifier
+              LinesList[i].feedback += "Long by " + str(S.SyllList[i][0]-Syll) + " syllable(s)."
+
+    Score = int(((len(LinesList)-(Penalty))/len(LinesList))*100)
+    return Score
+    
+    
+def IambicPentScorer(OoOP: int) -> int:
+    # A correct line will add 10 marks
+    # At the end, mark is divided by num of lines then mult. by 10
+    # I think OoOP should be 2 as standard (out of order penalty)
+    Penalty = OoOP 
+    IPTotal = 0
+    
+    # First process each line and optimise it
+    
+    for i in range(len(LinesList)):
+        lineTotal = 10 # Initialise maximum line score
+        stressPatt = LinesList[i].getStressPattern()
+        print ("Stress pattern initially is " + stressPatt)
+        newStressPatt = ""
+        if stressPatt[0] == "2":
+            newStressPatt += "0" # Assumed to be unstressed
+        else: 
+            newStressPatt += stressPatt[0]
+        for i in range(1, len(stressPatt)):
+            if stressPatt[i] == "2":
+              if newStressPatt[i-1] == "0":
+                newStressPatt += "1"
+              else:
+                newStressPatt += "0"
+            else:
+                newStressPatt += stressPatt[i]
+        
+        stressPatt = newStressPatt  
+        print  ("New stress pattern is " + stressPatt)
+        
+        # Penalise each line for breaking Iambic Pentameter
+        print ("Number of feet is " + str(stressPatt.count("01")))
+        lineTotal = (stressPatt.count("01")*2) # Initialise maximum line score
+        print ("Starting line total is " + str(lineTotal))
+        if stressPatt[0] == "1":
+          lineTotal -= Penalty    # Penalty for starting on a stressed syllable
+        if stressPatt[len(stressPatt)-1] == "0":
+          lineTotal -= Penalty    # Penalty for ending on an unstressed syllable
+          
+        print ("Line total is " + str(lineTotal))  
+        
+        if lineTotal > 0:
+          IPTotal += lineTotal  
+      
+    Score = int((IPTotal/len(LinesList))*10)
+    return Score
+
+
+def RhymeScorer(S: Structure) -> int:
+    global LinesList
+    Score = 0.0 
+    for i in range(65, 91): 
+      MatchLines = [] # List of line nums that should all rhyme
+      RhymeDict = {} #Dictionary to find most frequent rhyme sound      
+      Analyse = False
+      for x in range(len(S.RhymeScheme)):
+        if S.RhymeScheme[x] == i:
+          Analyse = True
+          if Analyse == True: 
+            MatchLines.append(x+1)
+            RhyStr = ""
+            for j in range(len(LinesList[x].getRhyme1())):
+              RhyStr += LinesList[x].getRhyme1()[j]
+            if RhymeDict.get(RhyStr) == None:
+              RhymeDict[RhyStr] = 1
+            else:
+              RhymeDict[RhyStr] = (RhymeDict.get(RhyStr)+1)
+
+            sorted_dict = {key: value for (key, value) in sorted(RhymeDict.items(), \
+            key=lambda x: x[1], reverse=True)}
+          
+      if Analyse == True:  
+        CommonSound = list(sorted_dict)[0]
+        
+        # Find one example of the CommonSound (RhyEg) to check for rhymes against
+        Found = False
+        while not Found:
+          for m in range(len(MatchLines)):
+            RhyStrTemp = ""
+            for n in range(len(LinesList[MatchLines[m]-1].getRhyme1())):
+              RhyStrTemp += LinesList[MatchLines[m]-1].getRhyme1()[n]
+            if RhyStrTemp == CommonSound:
+              Found = True
+              RhyEg = MatchLines[m] # This is the line num of a line with main rhyme
+              break
+        
+        # Check each line in MatchLines against RhyEg to see how well it matches
+        for p in range(len(MatchLines)):
+            Quality = RhymeQualityDetect(LinesList[RhyEg-1], LinesList[MatchLines[p]-1])
+            Score += (Quality/3)
+            if Quality < 3:
+              LinesList[MatchLines[p]-1].feedback += "Rhyme issue. "
+    
+    Highest = 65    # Remove one example of each rhyme (the archetype)
+    for i in S.RhymeScheme:
+        if i > 65:
+          Highest = i
+    Highest -= 64
+    Score -= Highest
+    Score /= ((len(LinesList))- Highest)
+    Score = int(Score*100)  
+    return Score  
+    
+def PoemScorer (S: Structure):
+    # Gives a total score for the whole poem
+    global OverallFeedback
+    OverallFeedback = ""
+    
+    if (len(LinesList)) < S.TotalLi or (len(LinesList)) < S.TotalLi:
+        Output = "The poem has the wrong number of lines for the selected \
+structure.\n"
+        Output += "Expected " + str(S.TotalLi) + " but " + str(len(LinesList)) + \
+" were entered."
+        return Output
+    
+    Output = ""
+    if SylCheck == True:
+      SylScore = SyllableScorer(S, SyllableWorstCase,SyllableMod)
+      if RhyCheck == True:
+        OverallFeedback += "Syllable score is " + str(SylScore) + "%\n"
+        SylTot = (SylScore*SyllWeight)
+        RhyScore = RhymeScorer(S)
+        OverallFeedback += "Rhyme score is " + str(RhyScore) + "%\n"
+        RhyTot = (RhyScore*RhymeWeight)
+        if IPCheck == False:                    
+          TotalScore = str((SylTot + RhyTot)/10) 
+          Output = "Poem score is " + TotalScore + "%"
+          return Output         
+        if IPCheck == True:
+          IPTot = (IambicPentScorer(OoOP)*IamIPWeight)
+          TotalScore = (SylTot+RhyTot+IPTot)/(10 + IamIPWeight)
+          return TotalScore     
+      if RhyCheck == False:
+        if IPCheck == False:
+          SylTot = (SylScore)
+          OverallFeedback += "SylScore is " + str(SylTot) + "%\n"
+          Output += "Poem score is " + str(SylTot) + "%"
+          return Output  
+        elif IPCheck == True:
+          SylTot = (SylScore*SyllWeight)
+          IPTot = (IambicPentScorer(OoOP)*IamIPWeight)
+          TotalScore = (SylTot+IPTot)/10
+          return TotalScore
+               
+    
+def Feedback2String():
+  for i in range(len(LinesList)):
+    print ("Line " + str(i+1), end = "")
+    print (LinesList[i].feedback)       
+    
+
+
+#TKINTER SETTINGS
+
+App = tk.Tk()
+App.title('Lyrical Guide')
+
+App.geometry("1200x800")
+App.minsize(width=800, height=400)
+
+#Menu Bar Frame
+TopBar = tk.Frame(App)
+TopBar.place(x=5, y=0)
+
+#Second menu Bar Frame 
+SecondBar = tk.Frame(App)
+SecondBar.place(x=40, y=30)
+
+#Poem Text Canvas
+TKTextCan = tk.Canvas(App, height=600, width=500, bg = "white")
+TKTextCan.place(x=60, y=110)
+
+#Below Text Button Frame
+BelowTxt = tk.Frame(App)
+BelowTxt.place(x=240, y=740)
+
+# Views Frame
+ViewFrame = tk.Frame(App)
+ViewFrame.place(x = 860, y =10)
+
+# Views Data Frame
+ViewDataFrame = tk.Frame(App, height=600, width=500, relief = "groove")
+ViewDataFrame.place(x = 655, y =110)
+
+# Views "Below Data Frame" Frame
+ViewBlwDataFrame = tk.Frame(App, height=40, width=200)
+ViewBlwDataFrame.place(x = 855, y=740)   
+
+
+# Line Indicator
+
+TKLineCan = tk.Frame(App, height=600, width=35)
+TKLineCan.place(x= 20, y=72)
+TKLiLabel = tk.Label(TKLineCan, text= "Line", font = ("arial 12 italic"))
+TKLiLabel.place(x=0, y=0)
+TKLiNos = tk.Label(TKLineCan, text = "", font = ("arial", 12))   
+
+def UpdateLineNum() -> None:
+    #Updates line numbers on screen when text is input
+    global TKLiNos
+    TKLiNos.destroy()
+    TKLineNumbers = ""
+    Stanza = 1
+    global TKLineNumCheck
+    
+    if len(LinesList) > TKLineNumCheck:
+        for i in range(0, len(LinesList)):
+          if LinesList[i].stanza == Stanza:
+            TKLineNumbers += "\n"
+            TKLineNumbers += str(LinesList[i].lineNum)
+          else:
+            Stanza += 1
+            TKLineNumbers += "\n"
+            TKLineNumbers += "\n"
+            TKLineNumbers += str(LinesList[i].lineNum)
+            
+            
+        TKLiNos = tk.Label(TKLineCan, text = TKLineNumbers, font = ("arial", 12))
+        TKLiNos.place(x=8, y=20)
+
+
+def UpdateLineNumWStruc(S:Structure) -> None:
+    global TKLiNos
+    TKLiNos.destroy()
+    TKLineNumbers = ""
+    Stanza = 1
+    CurrentLine=1
+    global TKLineNumCheck
+    if StructureExists == True:
+        for i in range(len(S.LineStanz)):
+          if str(S.LineStanz[i]) == str(Stanza):
+            TKLineNumbers += str(CurrentLine)+"\n"
+            CurrentLine +=1
+          else:
+            TKLineNumbers += "\n"
+            Stanza += 1
+            TKLineNumbers += str(CurrentLine)+"\n"
+            CurrentLine +=1
+            
+        TKLiNos = tk.Label(TKLineCan, text = TKLineNumbers, font = ("arial", 12))
+        TKLiNos.place(x=8, y=35)
+
+def ClearLineNum():
+    TKLiNos.destroy()
+
+# Structure Title Label
+TKStrLabCan = tk.Canvas(App, height=40, width=400)
+TKStrLabCan.place(x=650, y=72)
+TKRhyLabel = tk.Label(TKStrLabCan, text= "Rhyme", font = ("arial 12 italic"))
+TKRhyLabelOff = tk.Label(TKStrLabCan, text= "Rhyme", font = ("arial 12 italic"), fg="snow3")
+TKStrLabel = tk.Label(TKStrLabCan, text= "   {   Min. Syllables   |   Max. Syllables }  ", \
+font = ("arial 12 italic"))
+TKStrLabelOff = tk.Label(TKStrLabCan, text= "   {   Min. Syllables   |   Max. Syllables   }  ", \
+font = ("arial 12 italic"), fg="snow3")
+TKIPLabel = tk.Label(TKStrLabCan, text= "Iambic P.", font = ("arial 12 italic"))
+TKIPLabelOff = tk.Label(TKStrLabCan, text= "Iambic P.", font = ("arial 12 italic"), fg="snow3")
+
+#At startup
+TKRhyLabelOff.pack(side = tk.LEFT)
+TKStrLabelOff.pack(side = tk.LEFT, ipadx = 30) 
+TKIPLabelOff.pack(side = tk.LEFT, ipadx = 20) 
+
+def ClearStructureLabels():
+    TKRhyLabelOff.forget()
+    TKStrLabelOff.forget()
+    TKIPLabelOff.forget()
+    TKRhyLabel.forget()
+    TKStrLabel.forget()
+    TKIPLabel.forget()    
+
+def StructureLabelCheck():
+    ClearStructureLabels()
+    if RhyCheck == True:
+      TKRhyLabel.pack(side = tk.LEFT)
+    else:
+      TKRhyLabelOff.pack(side = tk.LEFT)
+    if SylCheck == True:  
+      TKStrLabel.pack(side = tk.LEFT, ipadx = 30)
+    else:
+      TKStrLabelOff.pack(side = tk.LEFT, ipadx = 30) 
+    if IPCheck == True:  
+      TKIPLabel.pack(side = tk.LEFT, ipadx = 20)
+    else:
+      TKIPLabelOff.pack(side = tk.LEFT, ipadx = 20) 
+
+
+# Canvases for indicators
+   
+def clearSecondBar():   #Remove all options from the second bar
+    global TextOptionsUp
+    global StructureOptionsUp
+    for widget in SecondBar.winfo_children():
+      widget.destroy()
+
+
+#Drop down menu at top left
+def FileSelected (event):
+    if clicked.get() == "Import Poem":
+      myLabel = tk.Label(App, text = "This is where the function goes").pack()
+    if clicked.get() == "Import Form":
+      ImportStructureWindow()
+    if clicked.get() == "Export Poem":
+      SaveText()
+      ExportPoemWindow()
+    if clicked.get() == "Quit":
+      App.destroy()
+    clicked.set("File     ")
+
+optionsList = ["Import Poem","Export Poem", "Import Form", 
+"Export Form", "Export Score", "Quit"]
+
+
+clicked = tk.StringVar()
+clicked.set("File     ")
+
+FileOM = tk.OptionMenu(TopBar, clicked, *optionsList, command = FileSelected)
+FileOM.config(bg = "#7af0b5")
+FileOM["menu"].config(bg="#7af0b5")
+FileOM.pack(side = tk.LEFT)
+
+def ImportStructureWindow():
+    ISWindow = tk.Toplevel()
+    ISWindow.title("Import Form")
+    ISWindow.geometry("600x300")
+    
+    ISWindow.minsize(width=300, height=100)
+    Instr = tk.Label(ISWindow, text = "Filename:").place(x = 98, y = 80)
+    EnterFile = tk.Entry(ISWindow, width = 60)
+    EnterFile.place(x = 100, y = 100)
+    Save = tk.Button(ISWindow, text = "Import", \
+    command=lambda: [ReadPlainTextStruct(EnterFile.get()),ISWindow.destroy()], \
+    bg = "#7af0b5").place(x = 470, y = 95)
+    Exit = tk.Button(ISWindow, text = "Exit", command = ISWindow.destroy).place(x = 470, y = 200)
+
+def TKExportPTPoem(filename: str) -> None:
+  #Export a poem as a plain text file
+  with open(filename, 'w') as f:
+    f.write(PoemText.get(1.0, tk.END))  
+
+
+def ExportPoemWindow():
+    ISWindow = tk.Toplevel()
+    ISWindow.title("Export Poem")
+    ISWindow.geometry("600x300")
+    
+    def Saved(fn: str):
+      TKExportPTPoem(fn)
+      Saved = tk.Label(ISWindow, text = "Saved", fg = "#b981e3").place(x = 470, y = 120)
+      time.sleep(1)
+      ISWindow.destroy()
+        
+    ISWindow.minsize(width=300, height=100)
+    Instr = tk.Label(ISWindow, text = "Filename:").place(x = 98, y = 80)
+    EnterFile = tk.Entry(ISWindow, width = 60)
+    EnterFile.place(x = 100, y = 100)
+    Save = tk.Button(ISWindow, text = "Save", 
+    command=lambda: Saved(EnterFile.get()), bg = "#7af0b5").place(x = 470, y = 95)
+    Exit = tk.Button(ISWindow, text = "Exit", command = ISWindow.destroy).place(x = 470, y = 200)
+
+#Views
+
+StructureViewToggle = False
+ScoreViewToggle = False
+PhoneticViewToggle = False
+
+def ClearView():
+  # This removes any view that the user is in  
+  for widget in ViewDataFrame.winfo_children():
+    widget.forget()
+  for widget in ViewBlwDataFrame.winfo_children():
+    widget.forget()  
+  ScoreViewToggle = False
+  StructureViewToggle = False
+  PhoneticViewToggle = False
+  
+def TKDisplayPhonView()-> None:
+  for widget in ViewDataFrame.winfo_children():
+    widget.forget()
+  OutputText= PoemPronunc2StringNoStruct()
+  Out = tk.Label(ViewDataFrame, text = OutputText, font = "Arial 12")
+  Out.pack(side = tk.LEFT, ipady = 1)
+  ScoreViewToggle = False
+  StructureViewToggle = False  
+
+def PhoneticView():
+    ClearView()
+    ScoreViewToggle = False
+    StructureViewToggle = False
+    TKDisplayPhonView()
+    EdPhonButt.pack(side = tk.LEFT, ipady = 1) 
+    
+
+def CheckEnablePhoneticView():
+    if PoemExists == True:
+        PhonViewButt["state"] = "normal" 
+    ClearView()    
+
+PhonViewButt = tk.Button(ViewFrame,
+                        borderwidth = 1,
+                        width = 10,
+                        relief="raised",
+                        bg="#77b1c9",
+                        text="Phonetic\nView",
+                        command = PhoneticView,
+                        state = "disabled",
+                        justify=tk.CENTER)
+PhonViewButt.pack(side = tk.LEFT, ipady = 1)  
+
+def TKDisplayStructureView()-> None:
+  for widget in ViewDataFrame.winfo_children():
+    widget.forget()
+  OutputText= CurrentStructure.TKStructure2String()
+  Out = tk.Label(ViewDataFrame, text = OutputText, font = "Arial 12")
+  Out.pack(side = tk.LEFT, ipady = 1)
+  ScoreViewToggle = False
+  StructureViewToggle = False
+
+def StructView():
+    ClearView()
+    ScoreViewToggle = False
+    StructureViewToggle = True
+    TKDisplayStructureView()
+
+def CheckEnableStructView():
+    if StructureExists == True:
+        StructViewButt["state"] = "normal" 
+    ClearView()    
+
+StructViewButt = tk.Button(ViewFrame,
+                        borderwidth = 1,
+                        width = 10,
+                        relief="raised",
+                        bg="#bf8ce6",
+                        text="Form\nGuide",
+                        command = StructView,
+                        state = "disabled",
+                        justify=tk.CENTER)
+StructViewButt.pack(side = tk.LEFT, ipady = 1)
+
+def TKDisplayScorerView():
+  for widget in ViewDataFrame.winfo_children():
+    widget.forget()
+  OutputText= "This is where the score information will go"
+  Out = tk.Label(ViewDataFrame, text = OutputText, font = "Arial 12")
+  Out.pack(side = tk.LEFT, ipady = 1)
+  ScoreViewToggle = False
+  StructureViewToggle = False
+
+def ScorerView():
+  ClearView()
+  StructureViewToggle = False
+  ScoreViewToggle = True
+  TKDisplayScorerView()  
+
+def CheckEnableScorer():        
+    if StructureExists == True and PoemExists == True:
+        ScorViewButt["state"] = "normal"
+        ScorButt["state"] = "normal"
+    ClearView()
+
+ScorViewButt = tk.Button(ViewFrame,
+                        borderwidth = 1,
+                        width = 10,
+                        relief="raised",
+                        bg="#deb462",
+                        text="Scorer\nView",
+                        command = ScorerView,
+                        state = "disabled",
+                        justify=tk.CENTER)
+ScorViewButt.pack(side = tk.LEFT, ipady = 1)
+
+ClearViewButt = tk.Button(ViewFrame,
+                        borderwidth = 1,
+                        width = 10,
+                        relief="raised",
+                        text="Clear\nView",
+                        command = ClearView,
+                        justify=tk.CENTER)
+ClearViewButt.pack(side = tk.LEFT, ipady = 1)           
+
+#Phonetic View 
+
+
+def EditPhonemes():
+    #Pop Up a Window to let you Choose which ones to edit
+    global CurrentStructure
+    ISWindow = tk.Toplevel()
+    ISWindow.title("Edit Phonemes")
+    ISWindow.geometry("1000x600")
+    ISWindow.minsize(width=800, height=400)
+    Exit = tk.Button(ISWindow, text = "Exit", command = ISWindow.destroy)
+    Exit.place(x = 900, y = 540)
+    Enter = tk.Button(ISWindow, text = "Edit Phonemes", command = AddStructure,
+    bg = "#d9b8f5")
+    Enter.place(x = 295, y = 347)
+    ESInstruction = tk.Label(ISWindow, text = PoemNoSoundsPron2String(), font= ("arial", 12),
+    justify=tk.LEFT)
+    ESInstruction.place(x= 665, y = 12)
+    #Phoneme Entry Box
+    Entered = tk.Text(ISWindow, height = 35, width= 70,font = ("arial", 12))
+    Entered.insert(1.0, str(PoemPronunc2StringNoStruct()))
+    Entered.place(x= 10, y = 10)
+
+EdPhonButt = tk.Button(ViewBlwDataFrame,
+                        borderwidth = 1,
+                        width = 10,
+                        relief="raised",
+                        text="Edit\nPhonemes",
+                        bg="#77b1c9",
+                        command = EditPhonemes,
+                        justify=tk.CENTER)
+
+
+#Structure 
+
+def ChooseStructureWindow():
+    global CurrentStructure
+    CSWindow = tk.Toplevel()
+    CSWindow.title("Choose a Form")
+    CSWindow.geometry("1000x600")
+    CSWindow.minsize(width=800, height=400)
+    Exit = tk.Button(CSWindow, text = "Exit", command = CSWindow.destroy)
+    Exit.place(x = 900, y = 540)
+    def FormSelect(form: str) -> None:
+        if form == "Haiku":
+          PoemStruct = Structure(3)
+          Haiku(PoemStruct)
+          StructureLabelCheck()
+        if form == "Limerick":
+          PoemStruct = Structure(5)
+          Limerick(PoemStruct)
+          StructureLabelCheck()
+        if form == "Quatrain":
+          PoemStruct = Structure(4)
+          Quatrain(PoemStruct)
+          StructureLabelCheck()
+        if form == "Quatrains":
+          PoemStruct = Structure(4)
+          Quatrains(PoemStruct)
+          StructureLabelCheck()
+        if form == "PetrSonnet":
+          PoemStruct = Structure(14)
+          PetrSonnet(PoemStruct)
+          StructureLabelCheck()
+        if form == "ShakSonnet":
+          PoemStruct = Structure(14)
+          ShakSonnet(PoemStruct)
+          StructureLabelCheck()
+        if form == "SimpSonnet":
+          PoemStruct = Structure(14)
+          SimpSonnet(PoemStruct)
+          StructureLabelCheck()
+        if form == "SpenSonnet":
+          PoemStruct = Structure(14)
+          SpenSonnet(PoemStruct)  
+          StructureLabelCheck()
+        CurrentStructure = PoemStruct
+        CheckEnableStructView()
+        CheckEnableScorer()
+        StructView()
+        CSWindow.destroy()
+        
+        
+    
+    
+    #Poetic Forms Label
+    Forms = tk.Label(CSWindow, text = "Forms", font= ('Arial 20 bold'))
+    Forms.place(x= 470, y = 40)
+    #Haiku Button
+    HaikuB = tk.Button(CSWindow, text = "Haiku", font= ('Arial 12'), 
+    width=12,height = 3, bg = "#4dc96a", command = lambda: FormSelect("Haiku"))
+    HaikuB.place(x = 80, y = 100)
+    #Limerick Button
+    LimerickB = tk.Button(CSWindow, text = "Limerick", font= ('Arial 12'), 
+    width=12,height = 3, bg="#79e091", command = lambda: FormSelect("Limerick"))
+    LimerickB.place(x = 330, y = 100)
+    #Single Quatrain Button
+    QuatrainB = tk.Button(CSWindow, text = "A \n Quatrain", font= ('Arial 12'), 
+    width=12,height = 3, bg="#8be09f", command = lambda: FormSelect("Quatrain"))
+    QuatrainB.place(x = 580, y = 100)
+    # Multiple Quatrains Button
+    QuatrainsB = tk.Button(CSWindow, text = "Multiple \n Quatrains", font= ('Arial 12'), 
+    width=12,height = 3, bg="#9ed9ac", command = lambda: FormSelect("Quatrains"))
+    QuatrainsB.place(x = 830, y = 100)
+    #Sonnets Label
+    Sonnets = tk.Label(CSWindow, text = "Sonnet Forms", font= ('Arial 16'))
+    Sonnets.place(x= 450, y = 250)
+    # Petrarchan
+    PetrarchanB = tk.Button(CSWindow, text = "Petrarchan\nSonnet", font= ('Arial 12'), 
+    width=12,height = 3, bg = "#bbb4cf", command = lambda: FormSelect("PetrSonnet"))
+    PetrarchanB.place(x = 80, y = 300)
+    #Shakespearian
+    ShakespearianB = tk.Button(CSWindow, text = "Shakespearian\nSonnet", font= ('Arial 12'), 
+    width=12,height = 3, bg="#a497c7", command = lambda: FormSelect("ShakSonnet"))
+    ShakespearianB.place(x = 330, y = 300)
+    #Simple
+    SimpleB = tk.Button(CSWindow, text = "Simple\nSonnet", font= ('Arial 12'), 
+    width=12,height = 3, bg="#907ec2", command = lambda: FormSelect("SimpSonnet"))
+    SimpleB.place(x = 580, y = 300)
+    #Spencerian
+    SpencerianB = tk.Button(CSWindow, text = "Spencerian\nSonnet", font= ('Arial 12'), 
+    width=12,height = 3, bg="#816cbd", command = lambda: FormSelect("SpenSonnet"))
+    SpencerianB.place(x = 830, y = 300)    
+
+def ChooseStructure():
+    clearSecondBar()
+    ChooseStructureWindow()
+
+def ImportStructure():
+    clearSecondBar()
+
+ESInsText = "Please enter form in the format:\nTotal number of Lines,\
+R/r,S/s\n Then for each line: Stanza number, Rhyme scheme letter (if in use), \
+Minimum Syllables,\n Maximum Syllables (again only if they are active).Use a new \
+line for each line in the poem and separate values with commas. \n \n For more \
+information, use the 'About' section \n \n For example, for a \
+limerick, enter:\n\n5,R,S,ip\n1,A,7,9\n1,A,7,9\n1,B,4,5\n1,B,4,5\n1,A,7,9\n"
+
+def EnterStructureWindow():
+    global CurrentStructure
+    ESWindow = tk.Toplevel()
+    ESWindow.title("Enter Form")
+    ESWindow.geometry("1000x600")
+    ESWindow.minsize(width=800, height=400)
+    Exit = tk.Button(ESWindow, text = "Exit", command = ESWindow.destroy)
+    Exit.place(x = 900, y = 540)
+    Enter = tk.Button(ESWindow, text = "Enter Form", command = AddStructure,
+    bg = "#d9b8f5")
+    Enter.place(x = 295, y = 347)
+    ESInstruction = tk.Label(ESWindow, text = ESInsText, font= ('Arial', 12),
+    justify=tk.LEFT)
+    ESInstruction.place(x= 295, y = 10)
+    #Structure Entry Box
+    Entered = tk.Text(ESWindow, height = 20, width= 30,font = ("arial", 12))
+    Entered.place(x= 10, y = 10)
+    
+def EnterStructure():
+    clearSecondBar()
+
+NSEText = "No poem has been entered. Please enter a poem  \
+to detect a structure"
+
+def NoStructureEntWindow():
+    NSEWindow = tk.Toplevel()
+    NSEWindow.title("Enter Form")
+    NSEWindow.geometry("1000x60")
+    NSEWindow.minsize(width=80, height=60)
+    Exit = tk.Button(NSEWindow, text = "Exit", command = NSEWindow.destroy)
+    Exit.place(x = 900, y = 10)
+    ESInstruction = tk.Label(NSEWindow, text = NSEText, font= ('Arial', 12),
+    justify=tk.LEFT)
+    ESInstruction.place(x= 295, y = 10)
+
+# Existing Structure Buttons 
+
+def UseKnown(Form):
+    global PoemStruct
+    if Form == "a Haiku":
+      PoemStruct = Structure(3)
+      Haiku(PoemStruct)
+    if Form == "a Limerick":
+      PoemStruct = Structure(5)
+      Limerick(PoemStruct)
+    if Form == "a Petrarchan sonnet":
+      PoemStruct = Strucure(14)
+      PetrSonnet(PoemStruct)
+    if Form == "a Shakespearian sonnet":
+      PoemStruct = Strucure(14)
+      ShakSonnet(PoemStruct)
+    TKDisplayStructureView()  
+ 
+
+def ExistingStructureWindow(Form: str):
+    ESWindow = tk.Toplevel()
+    ESWindow.title("Use Known Form")
+    ESWindow.geometry("280x70")
+    ESWindow.minsize(width=100, height=60)
+    Yes = tk.Button(ESWindow, text = "Yes", command = lambda: [UseKnown(Form), \
+    ESWindow.destroy()], bg = "#79e091")
+    Yes.place(x = 15, y = 40)
+    Exit = tk.Button(ESWindow, text = "Exit", command = ESWindow.destroy)
+    Exit.place(x = 100, y = 40)
+    ESInstruction = tk.Label(ESWindow, text = "Do you want to write " + \
+    Form + "?", font= ('Arial', 12), justify=tk.LEFT)
+    ESInstruction.place(x= 15, y = 10)
+
+def WithinOne(A: int, B: int) -> bool:
+    WithinOne = False
+    if (A - B) < 2:
+        WithinOne = True
+    if (B - A) < 2:
+        WithinOne = True
+    return WithinOne
+    
+def WithinTwo(A: int, B: int) -> bool:
+    WithinTwo = False
+    if (A - B) < 3:
+        WithinTwo = True
+    if (B - A) < 3:
+        WithinTwo = True
+    return WithinTwo
+    
+
+def HaikuTime():
+    Haiku = False
+    if len(LinesList) == 3:
+      if WithinOne(LinesList[0].getSyllableCount(), 5) == True \
+      and WithinOne(LinesList[1].getSyllableCount(), 7) == True \
+      and WithinOne(LinesList[2].getSyllableCount(), 5) == True:
+        Haiku = True       
+    return Haiku
+
+def LimerickTime():
+    Limerick = False
+    if len(LinesList) == 5:
+      if WithinTwo(LinesList[0].getSyllableCount(), 7) == True \
+      and WithinTwo(LinesList[1].getSyllableCount(), 7) == True \
+      and WithinTwo(LinesList[2].getSyllableCount(), 5) == True \
+      and WithinTwo(LinesList[3].getSyllableCount(), 5) == True \
+      and WithinTwo(LinesList[4].getSyllableCount(), 7) == True :
+        Limerick = True
+    if CurrentStructure.RhymeScheme != [65,65,66,66,65]:
+        Limerick = False
+    return Limerick
+    
+def PetrSonnetTime():
+    Sonnet = False
+    if len(LinesList) == 14:
+        for line in LinesList:
+          if WithinTwo(line.getSyllableCount(), 10) == False:
+            Sonnet = False
+            return Sonnet
+        if CurrentStructure.RhymeScheme == \
+        [65, 66, 66, 65, 65, 66, 66, 65, 67, 68, 69, 67, 68, 69]:
+          Sonnet = True
+        return Sonnet
+        
+
+def ShakSonnetTime():
+    Sonnet = False
+    if len(LinesList) == 14:
+        for line in LinesList:
+          if WithinTwo(line.getSyllableCount(), 10) == False:
+            Sonnet = False
+            return Sonnet
+        if CurrentStructure.RhymeScheme == \
+        [65, 66, 65, 66, 67, 68, 67, 68, 69, 70, 69, 70, 71, 71]:
+          Sonnet = True
+        return Sonnet
+
+#def SimpleSonnetTime():
+
+#def SpenSonnetTime():      
+    
+
+def UseExistingStructure():
+    if HaikuTime() == True:
+      ExistingStructureWindow("a Haiku")
+    if LimerickTime() == True:
+      ExistingStructureWindow("a Limerick")
+    if PetrSonnetTime() == True:
+      ExistingStructureWindow("a Petrarchan sonnet")
+    if ShakSonnetTime() == True :
+      ExistingStructureWindow("a Shakespearian sonnet")
+      
+    
+
+def DetectStructure():
+    if PoemExists == True:
+      StructureDetect(len(LinesList), IncSyl, IncRhy)
+      UseExistingStructure()
+      clearSecondBar()
+      StructView()
+    else:
+      NoStructureEntWindow()
+      
+
+def EditStructure():
+    clearSecondBar()        
+
+def CancelStructure():
+    clearSecondBar()
+    
+def StructOptions():
+    clearSecondBar()
+    ChooStr = tk.Button(SecondBar,
+                        borderwidth = 1,
+                        width = 20,
+                        relief="raised",
+                        bg="#eadaf7",
+                        text="Choose Form",
+                        command = ChooseStructure,
+                        justify=tk.LEFT)
+    ChooStr.pack(side = tk.LEFT, ipady = 1)
+    
+    EntStru = tk.Button(SecondBar,
+                        borderwidth = 1,
+                        width = 20,
+                        relief="raised",
+                        bg="#d9b8f5",
+                        text="Enter Form",
+                        command = EnterStructureWindow,
+                        justify=tk.LEFT)
+    EntStru.pack(side = tk.LEFT, ipady = 1)
+    
+    DetStru = tk.Button(SecondBar,
+                        borderwidth = 1,
+                        width = 20,
+                        relief="raised",
+                        bg="#cba8f0",
+                        text="Detect Form",
+                        command = DetectStructure,
+                        justify=tk.LEFT)
+    DetStru.pack(side = tk.LEFT, ipady = 1)
+    
+    EdiStru = tk.Button(SecondBar,
+                        borderwidth = 1,
+                        width = 20,
+                        relief="raised",
+                        bg="#c095ed",
+                        text="Edit Form",
+                        command = EditStructure,
+                        justify=tk.LEFT)
+    EdiStru.pack(side = tk.LEFT, ipady = 1)
+    
+    
+    CancStru = tk.Button(SecondBar,
+                        borderwidth = 1,
+                        width = 20,
+                        relief="raised",
+                        bg="snow3",
+                        text="Cancel",
+                        command = CancelStructure,
+                        justify=tk.LEFT)
+    CancStru.pack(side = tk.LEFT, ipady = 1)
+        
+    
+StructButt2 = tk.Button(TopBar,
+                        borderwidth = 1,
+                        width = 20,
+                        relief="raised",
+                        bg="#bf8ce6",
+                        text="Form",
+                        command = StructOptions,
+                        justify=tk.LEFT)
+StructButt2.pack(side = tk.LEFT, ipady = 1)
+
+# Scorer
+
+def ScoreWindow():
+    ScoreWindow = tk.Toplevel()
+    ScoreWindow.title("Score")
+    ScoreWindow.geometry("1000x600")
+    ScoreWindow.minsize(width=800, height=400)
+    
+    
+    ScoreText = PoemScorer(CurrentStructure)
+    Feedback2String()
+    Analysis = tk.Label(ScoreWindow, text = OverallFeedback, font= ('Arial', 12),
+    justify=tk.LEFT)
+    Result = tk.Label(ScoreWindow, text = ScoreText, font= ('Arial', 14),
+    justify=tk.LEFT)
+    Analysis.place(x = 100, y = 100)
+    Result.place(x = 100, y = 350)
+    
+    Exit = tk.Button (ScoreWindow, text = "Exit score", command = ScoreWindow.destroy)
+    Exit.place(x = 900, y = 540)
+    
+
+ScorButt = tk.Button(TopBar,
+                        borderwidth = 1,
+                        width = 20,
+                        relief="raised",
+                        bg="#deb462",
+                        text="Scorer",
+                        command = ScoreWindow,
+                        state = "disabled",
+                        justify=tk.LEFT)
+ScorButt.pack(side = tk.LEFT, ipady = 1) 
+
+# Settings
+
+# Detect Settings
+def SetRhyStri(val: int) -> None:
+    global RhymeStrictLevel 
+    RhymeStrictLevel = val
+    
+def SetSylStri(val: int) -> None:
+    global SyllFlex 
+    SyllFlex = val
+    
+def RhyIncSet(val: bool) -> None:
+    global IncRhy
+    IncRhy = val
+
+def SetSyllCheck(val: bool) -> None:
+    global IncSyl
+    IncSyl = val
+
+# Scorer Settings
+def SetSylWor(val:int) -> None:
+    global SyllableWorstCase
+    SyllableWorstCase = val
+    
+def SetOoOP(val:int) -> None:
+    global OoOP
+    OoOP = val    
+
+#Frontend
+def SettingsWindow():
+    SettingsWindow = tk.Toplevel()
+    SettingsWindow.title("Settings")
+    SettingsWindow.geometry("1000x600")
+    SettingsWindow.minsize(width=800, height=400)
+    Exit = tk.Button (SettingsWindow, text = "Exit settings", command = SettingsWindow.destroy)
+    Exit.place(x=920, y = 565)
+    # Structure Detection Settings Frame
+    StrDetSetF = tk.Frame(SettingsWindow, height=500, width=450, relief = "groove", bg="#eadaf7")
+    StrDetSetF.place(x = 20, y =25)
+    StrTitle = tk.Label(StrDetSetF, text = "Structure Detect Settings", font= ('Arial', 16),
+    justify=tk.LEFT, bg="#eadaf7")
+    StrTitle.place(x= 25, y = 25)
+    
+    #Rhyme Strictness Control
+    RhyStri1On = tk.Button (StrDetSetF, text = "1", bg = "#c095ed", relief = "sunken")
+    RhyStri2On = tk.Button (StrDetSetF, text = "2", bg = "#c095ed", relief = "sunken")
+    RhyStri3On = tk.Button (StrDetSetF, text = "3", bg = "#c095ed", relief = "sunken")
+    RhyStri1Off = tk.Button (StrDetSetF, text = "1", command =lambda: [SetRhyStri(1),
+    RhyStriButtonCheck(1)], bg = "#eadaf7", relief = "raised")
+    RhyStri2Off = tk.Button (StrDetSetF, text = "2", command=lambda: [SetRhyStri(2),
+    RhyStriButtonCheck(2)],bg = "#eadaf7", relief = "raised")
+    RhyStri3Off = tk.Button (StrDetSetF, text = "3", command=lambda: [SetRhyStri(3),
+    RhyStriButtonCheck(3)],bg = "#eadaf7", relief = "raised")    
+    
+    def RhyStriButtonCheck(R: int):
+        RhyStri1On.place_forget()
+        RhyStri2On.place_forget()
+        RhyStri3On.place_forget()
+        RhyStri1Off.place_forget()
+        RhyStri2Off.place_forget()
+        RhyStri3Off.place_forget()
+        if R == 1:
+          RhyStri1On.place(x = 85, y = 65)
+          RhyStri2Off.place(x = 115, y = 65)
+          RhyStri3Off.place(x = 145, y = 65)            
+        if R == 2:
+          RhyStri1Off.place(x = 85, y = 65)
+          RhyStri2On.place(x = 115, y = 65)
+          RhyStri3Off.place(x = 145, y = 65) 
+        if R == 3:        
+          RhyStri1Off.place(x = 85, y = 65)
+          RhyStri2Off.place(x = 115, y = 65)
+          RhyStri3On.place(x = 145, y = 65)
+          
+    StrTitle = tk.Label(StrDetSetF, text = " Rhyme strictness", font= ('Arial', 12),
+    justify=tk.LEFT, bg="#eadaf7")
+    StrTitle.place(x= 175, y = 65)
+
+    RhyStriButtonCheck(RhymeStrictLevel)
+    
+    #Syllable Strictness Control
+    SylStri0On = tk.Button (StrDetSetF, text = "0", bg = "#c095ed", relief = "sunken")
+    SylStri1On = tk.Button (StrDetSetF, text = "1", bg = "#c095ed", relief = "sunken")
+    SylStri2On = tk.Button (StrDetSetF, text = "2", bg = "#c095ed", relief = "sunken")
+    SylStri3On = tk.Button (StrDetSetF, text = "3", bg = "#c095ed", relief = "sunken")
+    SylStri4On = tk.Button (StrDetSetF, text = "4", bg = "#c095ed", relief = "sunken")
+    SylStri0Off = tk.Button (StrDetSetF, text = "0", command =lambda: [SetSylStri(0),
+    SylStriButtonCheck(0)], bg = "#eadaf7", relief = "raised")
+    SylStri1Off = tk.Button (StrDetSetF, text = "1", command =lambda: [SetSylStri(1),
+    SylStriButtonCheck(1)], bg = "#eadaf7", relief = "raised")
+    SylStri2Off = tk.Button (StrDetSetF, text = "2", command=lambda: [SetSylStri(2),
+    SylStriButtonCheck(2)],bg = "#eadaf7", relief = "raised")
+    SylStri3Off = tk.Button (StrDetSetF, text = "3", command=lambda: [SetSylStri(3),
+    SylStriButtonCheck(3)],bg = "#eadaf7", relief = "raised")    
+    SylStri4Off = tk.Button (StrDetSetF, text = "4", command =lambda: [SetSylStri(4),
+    SylStriButtonCheck(4)], bg = "#eadaf7", relief = "raised")
+    
+    def SylStriButtonCheck(S: int):
+        SylStri0On.place_forget()
+        SylStri1On.place_forget()
+        SylStri2On.place_forget()
+        SylStri3On.place_forget()
+        SylStri4On.place_forget()
+        SylStri0Off.place_forget()
+        SylStri1Off.place_forget()
+        SylStri2Off.place_forget()
+        SylStri3Off.place_forget()
+        SylStri4Off.place_forget()
+        if S == 0:
+          SylStri0On.place(x = 25, y = 115)
+          SylStri1Off.place(x = 55, y = 115)
+          SylStri2Off.place(x = 85, y = 115)
+          SylStri3Off.place(x = 115, y = 115)
+          SylStri4Off.place(x = 145, y = 115) 
+        if S == 1:
+          SylStri0Off.place(x = 25, y = 115)
+          SylStri1On.place(x = 55, y = 115)
+          SylStri2Off.place(x = 85, y = 115)
+          SylStri3Off.place(x = 115, y = 115)
+          SylStri4Off.place(x = 145, y = 115)            
+        if S == 2:
+          SylStri0Off.place(x = 25, y = 115)
+          SylStri1Off.place(x = 55, y = 115)
+          SylStri2On.place(x = 85, y = 115)
+          SylStri3Off.place(x = 115, y = 115)
+          SylStri4Off.place(x = 145, y = 115)   
+        if S == 3:        
+          SylStri0Off.place(x = 25, y = 115)
+          SylStri1Off.place(x = 55, y = 115)
+          SylStri2Off.place(x = 85, y = 115)
+          SylStri3On.place(x = 115, y = 115)
+          SylStri4Off.place(x = 145, y = 115)
+        if S == 4:        
+          SylStri0Off.place(x = 25, y = 115)
+          SylStri1Off.place(x = 55, y = 115)
+          SylStri2Off.place(x = 85, y = 115)
+          SylStri3Off.place(x = 115, y = 115)
+          SylStri4On.place(x = 145, y = 115)
+          
+    StrTitle = tk.Label(StrDetSetF, text = " Syllable strictness", font= ('Arial', 12),
+    justify=tk.LEFT, bg="#eadaf7")
+    StrTitle.place(x= 175, y = 115)
+
+    SylStriButtonCheck(SyllFlex)
+    
+    #Rhyme Include Control
+    RhyIncOnSunk = tk.Button (StrDetSetF, text = "On", bg = "#c095ed", relief = "sunken")
+    RhyIncOffSunk = tk.Button (StrDetSetF, text = "Off", bg = "#c095ed", relief = "sunken")
+    RhyIncOnUp = tk.Button (StrDetSetF, text = "On", command =lambda: [RhyIncSet(True),
+    RhyIncButtonCheck(True)], bg = "#eadaf7", relief = "raised")
+    RhyIncOffUp = tk.Button (StrDetSetF, text = "Off", command=lambda: [RhyIncSet(False),
+    RhyIncButtonCheck(False)],bg = "#eadaf7", relief = "raised")
+       
+    
+    def RhyIncButtonCheck(R: bool):
+        RhyIncOnSunk.place_forget()
+        RhyIncOffSunk.place_forget()
+        RhyIncOnUp.place_forget()
+        RhyIncOffUp.place_forget()
+        if R == True:
+          RhyIncOnSunk.place(x = 95, y = 165)
+          RhyIncOffUp.place(x = 135, y = 165)           
+        if R == False:
+          RhyIncOnUp.place(x = 95, y = 165)
+          RhyIncOffSunk.place(x = 135, y = 165)
+
+          
+    RhyIncTitle = tk.Label(StrDetSetF, text = " Rhyme check always on", font= ('Arial', 12),
+    justify=tk.LEFT, bg="#eadaf7")
+    RhyIncTitle.place(x= 175, y = 165)
+
+    RhyIncButtonCheck(IncRhy)
+    
+    # Syllable Include Control
+    
+    SyllIncOnSunk = tk.Button (StrDetSetF, text = "On", bg = "#c095ed", relief = "sunken")
+    SyllIncOffSunk = tk.Button (StrDetSetF, text = "Off", bg = "#c095ed", relief = "sunken")
+    SyllIncOnUp = tk.Button (StrDetSetF, text = "On", command =lambda: [SetSyllCheck(True),
+    SylCheckIncButtonCheck(True)], bg = "#eadaf7", relief = "raised")
+    SyllIncOffUp = tk.Button (StrDetSetF, text = "Off", command=lambda: [SetSyllCheck(False),
+    SylCheckIncButtonCheck(False)],bg = "#eadaf7", relief = "raised")
+    
+    def SylCheckIncButtonCheck(S: bool):
+        SyllIncOnSunk.place_forget()
+        SyllIncOffSunk.place_forget()
+        SyllIncOnUp.place_forget()
+        SyllIncOffUp.place_forget()
+        if S == True:
+          SyllIncOnSunk.place(x = 95, y = 215)
+          SyllIncOffUp.place(x = 135, y = 215)           
+        if S == False:
+          SyllIncOnUp.place(x = 95, y = 215)
+          SyllIncOffSunk.place(x = 135, y = 215)
+
+          
+    SyllIncTitle = tk.Label(StrDetSetF, text = " Syllable check", font= ('Arial', 12),
+    justify=tk.LEFT, bg="#eadaf7")
+    SyllIncTitle.place(x= 175, y = 215)
+
+    SylCheckIncButtonCheck(IncSyl)
+    
+    
+    
+    
+    # Scorer Settings Frame
+    ScoSetF = tk.Frame(SettingsWindow, height=500, width=450, relief = "groove", bg = "#e8cf9e")
+    ScoSetF.place(x = 510, y = 25)
+    ScoTitle = tk.Label(ScoSetF, text = "Scorer Settings", font= ('Arial', 16),
+    justify=tk.LEFT, bg="#e8cf9e")
+    ScoTitle.place(x= 25, y = 25)
+    
+    Exit = tk.Button (SettingsWindow, text = "Exit settings", command = SettingsWindow.destroy)
+    Exit.place(x=920, y = 565)
+    
+    # Syllable Worst Case
+    SylWor0On = tk.Button (ScoSetF, text = "0", bg = "#deb462", relief = "sunken")
+    SylWor1On = tk.Button (ScoSetF, text = "1", bg = "#deb462", relief = "sunken")
+    SylWor2On = tk.Button (ScoSetF, text = "2", bg = "#deb462", relief = "sunken")
+    SylWor3On = tk.Button (ScoSetF, text = "3", bg = "#deb462", relief = "sunken")
+    SylWor4On = tk.Button (ScoSetF, text = "4", bg = "#deb462", relief = "sunken")
+    SylWor0Off = tk.Button (ScoSetF, text = "0", command =lambda: [SetSylWor(0),
+    SylWorButtonCheck(0)], bg = "#e8cf9e", relief = "raised")
+    SylWor1Off = tk.Button (ScoSetF, text = "1", command =lambda: [SetSylWor(1),
+    SylWorButtonCheck(1)], bg = "#e8cf9e", relief = "raised")
+    SylWor2Off = tk.Button (ScoSetF, text = "2", command=lambda: [SetSylWor(2),
+    SylWorButtonCheck(2)],bg = "#e8cf9e", relief = "raised")
+    SylWor3Off = tk.Button (ScoSetF, text = "3", command=lambda: [SetSylWor(3),
+    SylWorButtonCheck(3)],bg = "#e8cf9e", relief = "raised")    
+    SylWor4Off = tk.Button (ScoSetF, text = "4", command =lambda: [SetSylWor(4),
+    SylWorButtonCheck(4)], bg = "#e8cf9e", relief = "raised")
+    
+    def SylWorButtonCheck(S: int):
+        SylWor0On.place_forget()
+        SylWor1On.place_forget()
+        SylWor2On.place_forget()
+        SylWor3On.place_forget()
+        SylWor4On.place_forget()
+        SylWor0Off.place_forget()
+        SylWor1Off.place_forget()
+        SylWor2Off.place_forget()
+        SylWor3Off.place_forget()
+        SylWor4Off.place_forget()
+        if S == 0:
+          SylWor0On.place(x = 25, y = 65)
+          SylWor1Off.place(x = 55, y = 65)
+          SylWor2Off.place(x = 85, y = 65)
+          SylWor3Off.place(x = 115, y = 65)
+          SylWor4Off.place(x = 145, y = 65) 
+        if S == 1:
+          SylWor0Off.place(x = 25, y = 65)
+          SylWor1On.place(x = 55, y = 65)
+          SylWor2Off.place(x = 85, y = 65)
+          SylWor3Off.place(x = 115, y = 65)
+          SylWor4Off.place(x = 145, y = 65)            
+        if S == 2:
+          SylWor0Off.place(x = 25, y = 65)
+          SylWor1Off.place(x = 55, y = 65)
+          SylWor2On.place(x = 85, y = 65)
+          SylWor3Off.place(x = 115, y = 65)
+          SylWor4Off.place(x = 145, y = 65)   
+        if S == 3:        
+          SylWor0Off.place(x = 25, y = 65)
+          SylWor1Off.place(x = 55, y = 65)
+          SylWor2Off.place(x = 85, y = 65)
+          SylWor3On.place(x = 115, y = 65)
+          SylWor4Off.place(x = 145, y = 65)
+        if S == 4:        
+          SylWor0Off.place(x = 25, y = 65)
+          SylWor1Off.place(x = 55, y = 65)
+          SylWor2Off.place(x = 85, y = 65)
+          SylWor3Off.place(x = 115, y = 65)
+          SylWor4On.place(x = 145, y = 65)
+          
+    SylWoLab = tk.Label(ScoSetF, text = " Syllable worst case", font= ('Arial', 12),
+    justify=tk.LEFT, bg="#e8cf9e")
+    SylWoLab.place(x= 175, y = 65)
+    
+    SylWorButtonCheck(SyllableWorstCase)
+    
+        
+
+    # Slider for Syllable/Rhyme Scoring Balance
+    
+    SylltoRhyme = tk.Scale(ScoSetF, from_ = 0, to = 10, orient = "horizontal", \
+    bg="#e8cf9e", width = 30, length = 250, bd = 0, showvalue=0, troughcolor = "#e8cf9e", \
+    highlightcolor = "#deb462")
+    SylltoRhyme.set(RhymeWeight)
+    SylltoRhyme.place(x= 95, y = 165)
+    
+    def SetWeightings(val: int):
+        global RhymeWeight
+        global SyllWeight
+        global SylltoRhymeCurrent
+        RhymeWeight = val
+        SyllWeight = (10 - val)
+        SylltoRhymeCurrent.place_forget()
+        SylltoRhymeText = "Rhyme Weighting:    " + str(RhymeWeight) + "   |   " + str(SyllWeight) + \
+        "    : Syllable Weighting"
+        SylltoRhymeCurrent = tk.Label(ScoSetF, text = SylltoRhymeText,bg="#e8cf9e", \
+        font = ("arial", 12) )
+        SylltoRhymeCurrent.place(x= 55, y = 135)
+        
+    class MakeLabel():
+      global SylltoRhymeCurrent
+      SylltoRhymeText = "Rhyme Weighting:    " + str(RhymeWeight) + "   |   " + str(SyllWeight) + \
+        "    : Syllable Weighting"
+      SylltoRhymeCurrent = tk.Label(ScoSetF, text = SylltoRhymeText,bg="#e8cf9e", \
+      font = ("arial", 12) )
+      SylltoRhymeCurrent.place(x= 55, y = 135)
+    
+    MakeLabel()
+    
+    SliderSet = tk.Button (ScoSetF, text = "Set", command = lambda: [SetWeightings(SylltoRhyme.get()), \
+    MakeLabel()], bg = "#e8cf9e", relief = "raised")
+    SliderSet.place(x= 207, y = 205)
+    
+    # Iambic Pentameter OoOP
+    
+    OoOP0On = tk.Button (ScoSetF, text = "0", bg = "#deb462", relief = "sunken")
+    OoOP1On = tk.Button (ScoSetF, text = "1", bg = "#deb462", relief = "sunken")
+    OoOP2On = tk.Button (ScoSetF, text = "2", bg = "#deb462", relief = "sunken")
+    OoOP3On = tk.Button (ScoSetF, text = "3", bg = "#deb462", relief = "sunken")
+    OoOP4On = tk.Button (ScoSetF, text = "4", bg = "#deb462", relief = "sunken")
+    OoOP0Off = tk.Button (ScoSetF, text = "0", command =lambda: [SetOoOP(0),
+    OoOPButtonCheck(0)], bg = "#e8cf9e", relief = "raised")
+    OoOP1Off = tk.Button (ScoSetF, text = "1", command =lambda: [SetOoOP(1),
+    OoOPButtonCheck(1)], bg = "#e8cf9e", relief = "raised")
+    OoOP2Off = tk.Button (ScoSetF, text = "2", command=lambda: [SetOoOP(2),
+    OoOPButtonCheck(2)],bg = "#e8cf9e", relief = "raised")
+    OoOP3Off = tk.Button (ScoSetF, text = "3", command=lambda: [SetOoOP(3),
+    OoOPButtonCheck(3)],bg = "#e8cf9e", relief = "raised")    
+    OoOP4Off = tk.Button (ScoSetF, text = "4", command =lambda: [SetOoOP(4),
+    OoOPButtonCheck(4)], bg = "#e8cf9e", relief = "raised")
+    
+    def OoOPButtonCheck(S: int):
+        OoOP0On.place_forget()
+        OoOP1On.place_forget()
+        OoOP2On.place_forget()
+        OoOP3On.place_forget()
+        OoOP4On.place_forget()
+        OoOP0Off.place_forget()
+        OoOP1Off.place_forget()
+        OoOP2Off.place_forget()
+        OoOP3Off.place_forget()
+        OoOP4Off.place_forget()
+        if S == 0:
+          OoOP0On.place(x = 25, y = 265)
+          OoOP1Off.place(x = 55, y = 265)
+          OoOP2Off.place(x = 85, y = 265)
+          OoOP3Off.place(x = 115, y = 265)
+          OoOP4Off.place(x = 145, y = 265) 
+        if S == 1:
+          OoOP0Off.place(x = 25, y = 265)
+          OoOP1On.place(x = 55, y = 265)
+          OoOP2Off.place(x = 85, y = 265)
+          OoOP3Off.place(x = 115, y = 265)
+          OoOP4Off.place(x = 145, y = 265)            
+        if S == 2:
+          OoOP0Off.place(x = 25, y = 265)
+          OoOP1Off.place(x = 55, y = 265)
+          OoOP2On.place(x = 85, y = 265)
+          OoOP3Off.place(x = 115, y = 265)
+          OoOP4Off.place(x = 145, y = 265)   
+        if S == 3:        
+          OoOP0Off.place(x = 25, y = 265)
+          OoOP1Off.place(x = 55, y = 265)
+          OoOP2Off.place(x = 85, y = 265)
+          OoOP3On.place(x = 115, y = 265)
+          OoOP4Off.place(x = 145, y = 265)
+        if S == 4:        
+          OoOP0Off.place(x = 25, y = 265)
+          OoOP1Off.place(x = 55, y = 265)
+          OoOP2Off.place(x = 85, y = 265)
+          OoOP3Off.place(x = 115, y = 265)
+          OoOP4On.place(x = 145, y = 265)
+          
+    OoOPLab = tk.Label(ScoSetF, text = "Iambic pentameter penalty", font= ('Arial', 12),
+    justify=tk.LEFT, bg="#e8cf9e")
+    OoOPLab.place(x= 175, y = 265)
+    
+    OoOPButtonCheck(OoOP)
+    
+
+
+SettButt = tk.Button(TopBar,
+                        borderwidth = 1,
+                        width = 20,
+                        relief="raised",
+                        bg="#98adf5",
+                        text="Settings",
+                        command = SettingsWindow,
+                        justify=tk.LEFT)
+SettButt.pack(side = tk.LEFT, ipady = 1)                       
+
+# Help 
+
+def HelpWindow():
+    HelpWindow = tk.Toplevel()
+    HelpWindow.title("Information")
+    HelpWindow.geometry("1000x600")
+    HelpWindow.minsize(width=800, height=400)
+    Exit = tk.Button (HelpWindow, text = "Exit", command = HelpWindow.destroy)
+    Exit.place(x = 940, y = 550)
+
+HelpButt = tk.Button(TopBar,
+                        borderwidth = 1,
+                        width = 20,
+                        relief="raised",
+                        bg="#8cedec",
+                        text="Information",
+                        command = HelpWindow,
+                        justify=tk.LEFT)
+HelpButt.pack(side = tk.RIGHT, ipady = 1) 
+
+# Unrecognised WOrd Warning
+
+WarningText = "Warning! The application could not find pronunciation information \n \
+for the following words:"
+
+def UnrecognisedWordWindow():
+    UnrecogWindow = tk.Toplevel()
+    UnrecogWindow.title("Unrecognised Words Warning")
+    UnrecogWindow.geometry("1000x600")
+    UnrecogWindow.minsize(width=800, height=400)
+    WarnText = tk.Label(UnrecogWindow, text = WarningText, font= ('Arial', 12),
+    justify=tk.LEFT)
+    WarnText.place(x= 25, y = 15)
+    WarnTextContent = tk.Label(UnrecogWindow, text = PoemNoSoundsPron2String(), font= ('Arial', 12),
+    justify=tk.LEFT)
+    WarnTextContent.place(x= 25, y = 65)
+    Edit = tk.Button (UnrecogWindow, text = "Edit\nPhonemes", command = lambda: [EditPhonemes(),
+    UnrecogWindow.destroy()], bg="#77b1c9")
+    Edit.place(x = 800, y = 527)
+    Exit = tk.Button (UnrecogWindow, text = "Exit", command = UnrecogWindow.destroy)
+    Exit.place(x = 900, y = 540)
+   
+def UnrecognisedWarning():
+    Window = False
+    for line in LinesList:
+      if len(line.noSounds) > 0:
+       Window = True
+    if Window == True:
+      UnrecognisedWordWindow()
+
+# Poem Text Box
+def ClearAll():
+    global RhyCheck
+    global SylCheck
+    global IPCheck
+    RhyCheck = False
+    SylCheck = False
+    IPCheck = False
+    PoemText.delete(1.0, tk.END)
+    ClearLineNum()
+    ClearView()
+    PhonViewButt["state"] = "disabled"
+    StructViewButt ["state"] = "disabled"
+    ScorViewButt ["state"] = "disabled"
+    StructureLabelCheck()
+    PoemExists = False
+    
+def SaveText():
+    global PoemExists
+    PoemExists = True
+    inputTextNoStruct(PoemText)
+    PoemNoSoundsPron2String()    
+    CheckEnablePhoneticView()
+    CheckEnableScorer()
+      
+    UnrecognisedWarning()  
+     
+       
+    
+
+ClearButt = tk.Button(BelowTxt,
+                        borderwidth = 1,
+                        width = 20,
+                        relief="raised",
+                        bg="#738BF2",
+                        text="Clear",
+                        command = ClearAll,
+                        justify=tk.LEFT)
+ClearButt.pack(side = tk.RIGHT, ipady = 1)
+
+SaveButt = tk.Button(BelowTxt,
+                        borderwidth = 1,
+                        width = 20,
+                        relief="raised",
+                        bg="#79e091",
+                        text="Enter Poem",
+                        command = SaveText,
+                        justify=tk.LEFT)
+SaveButt.pack(side = tk.LEFT, ipady = 1)  
+
+PoemText = tk.Text(TKTextCan, height = 34, width= 60,font = ("arial", 12))
+PoemText.pack()
+
+
+
+App.mainloop()
